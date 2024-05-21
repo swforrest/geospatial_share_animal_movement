@@ -26,7 +26,7 @@ We import data that is output by the `data_prep` script. This dataset should be 
 
 ```{r}
 
-data_ssf <- read_csv("outputs/data_SSF_ready_2024-03-24.csv")
+data_ssf <- read_csv("outputs/data_SSF_ready_2024-05-21.csv")
 data_ssf$habsF <- factor(data_ssf$habs, labels = c("Kanuka", "Native Forest", "Exotic Conifers", "Exotic Hardwoods", "Agriculture", "Suburban", "Other"))
 
 head(data_ssf)
