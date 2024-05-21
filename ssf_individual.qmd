@@ -1,0 +1,685 @@
+---
+title: "Kākā individual-level SSFs"
+author: "Scott Forrest"
+format: 
+  html:
+    embed-resources: true
+bibliography: references.bib
+---
+
+Here we are fitting step selection functions to the GPS data of individual kākā from Orokonui Ecosanctuary. We will fit a separate SSF for each individual, and then compare the coefficients to see if there are any consistent patterns relating to factors such as age or sex in habitat selection.
+
+# Load Packages
+
+```{r}
+#| warning: false
+
+library(tidyverse)
+packages <- c("amt", "jtools", "patchwork")
+walk(packages, require, character.only = T)
+
+```
+
+# Import data
+
+We import data that is output by the `data_prep` script. This dataset should be ready to use in SSF models, although we will label the habitat categories for easier interpretation.
+
+```{r}
+
+data_ssf <- read_csv("outputs/data_SSF_ready_2024-03-24.csv")
+data_ssf$habsF <- factor(data_ssf$habs, labels = c("Kanuka", "Native Forest", "Exotic Conifers", "Exotic Hardwoods", "Agriculture", "Suburban", "Other"))
+
+head(data_ssf)
+
+```
+
+Plot the distribution of used and available points within each habitat type. The code for this function comes from @Fieberg2021-wx.
+
+```{r}
+
+gg_tag <- function (gg_tag) { 
+  
+  id_values <- unique(gg_tag$id)
+  
+  gg_tag %>% 
+    dplyr::group_by(case_, habsF) %>% 
+    dplyr::summarise(n = n()) %>% 
+    dplyr:: mutate(prop = n / sum(n), 
+                   label = paste0(round(prop * 100, 1), "%")) %>% 
+    ggplot(aes(habsF, prop, fill = case_, group=case_,label = label)) + 
+    geom_col(position = position_dodge2()) +
+    geom_text(size = 4, vjust = -0.25, position = position_dodge(width = 1)) +
+    labs(x = "Habitat Type", y = "Proportion", fill = "case_")+
+    scale_fill_brewer(palette = "Paired", name="", 
+                      breaks=c("FALSE", "TRUE"), 
+                      labels=c("Available", "Used")) +
+    ggtitle("Used and Available Points Landcover Type", 
+            subtitle = paste("ID", c(id_values), collapse = ", ")) +
+    theme_classic() +
+    theme(axis.text.x = element_text(margin = margin(t = 10, b = 15), angle = 0),
+          legend.position = c(0.9, 0.9)) 
+}
+
+```
+
+We can look at the distribution of used and available points for all individuals, or each individual separately. These plots provide some indication of how much a kākā used certain landcover types compared to what was available, which is typically reflected in the SSF coefficients.
+
+::: {.panel-tabset}
+
+## All IDs
+```{r}
+gg_tag(data_ssf)
+```
+
+## ID 45505
+```{r}
+data_ssf %>% filter(id == 45505) %>% gg_tag()
+```
+
+## ID 45506
+```{r}
+data_ssf %>% filter(id == 45506) %>% gg_tag()
+```
+
+## ID 45507
+```{r}
+data_ssf %>% filter(id == 45507) %>% gg_tag()
+```
+
+## ID 45508
+```{r}
+data_ssf %>% filter(id == 45508) %>% gg_tag()
+```
+
+## ID 45509
+```{r}
+data_ssf %>% filter(id == 45509) %>% gg_tag()
+```
+
+## ID 45510
+```{r}
+data_ssf %>% filter(id == 45510) %>% gg_tag()
+```
+
+## ID 45511
+```{r}
+data_ssf %>% filter(id == 45511) %>% gg_tag()
+```
+
+## ID 45512
+```{r}
+data_ssf %>% filter(id == 45512) %>% gg_tag()
+```
+
+## ID 45513
+```{r}
+data_ssf %>% filter(id == 45513) %>% gg_tag()
+```
+
+## ID 45514
+```{r}
+data_ssf %>% filter(id == 45514) %>% gg_tag()
+```
+
+:::
+
+# Fit SSF models
+
+We'll nest the data to `map` the SSF model fitting over each individual.
+
+```{r}
+
+data_ssf_nested <- data_ssf %>% group_by(id) %>% nest()
+
+```
+
+## Fit the models
+
+There are some warnings as the suburban habitat category wasn't visited by all individuals, so the standard errors for those individuals are really large, but the coefficients appear to have been estimated correctly. 
+
+```{r}
+
+data_ssf_nested <- data_ssf_nested %>%
+  mutate(ssf = lapply(data, function(x) {
+    x %>% fit_issf(case_ ~ habsF + sl_ + log_sl_ + cos_ta_ + strata(step_id_))
+  } ))
+
+```
+
+## Check model outputs
+
+::: {.panel-tabset}
+
+## ID 45505
+```{r}
+data_ssf_nested$ssf[1]
+```
+
+## ID 45506
+```{r}
+data_ssf_nested$ssf[2]
+```
+
+## ID 45507
+```{r}
+data_ssf_nested$ssf[3]
+```
+
+## ID 45508
+```{r}
+data_ssf_nested$ssf[4]
+```
+
+## ID 45509
+```{r}
+data_ssf_nested$ssf[5]
+```
+
+## ID 45510
+```{r}
+data_ssf_nested$ssf[6]
+```
+
+## ID 45511
+```{r}
+data_ssf_nested$ssf[7]
+```
+
+## ID 45512
+```{r}
+data_ssf_nested$ssf[8]
+```
+
+## ID 45513
+```{r}
+data_ssf_nested$ssf[9]
+```
+
+## ID 45514
+```{r}
+data_ssf_nested$ssf[10]
+```
+
+:::
+
+Add additional information to the model outputs.
+
+```{r}
+
+data_ssf_nested$Sex <- c("m", "m", "m", "f", "f", "f", "f", "m", "m", "f")
+data_ssf_nested$Age <- c(1, 10, 5, 1, 3, 2, 2, 3, 10, 8)
+data_ssf_nested$Origin <- c("o", "o", "c", "o", "o", "o", "o", "c", "c","o")
+
+```
+
+# Plot the model outputs against kākā variables
+
+## Age
+
+Create plot of estimated coefficients for all individuals together, relative to the reference category kānuka.
+
+```{r}
+
+# pulls out all coefficients and adds to data frame with other kākā info
+d2 <- data_ssf_nested %>% 
+  mutate(coef = map(ssf, ~ broom::tidy(.x$model))) %>% 
+  dplyr::select(id, Sex, coef, Age, Origin) %>% 
+  unnest(cols = c(coef)) %>% 
+  mutate(id = factor(id)) %>% 
+  drop_na()
+
+# remove coefficients relating to the movement parameters and also those that are less than -5 as they are due to the suburban habitat category not being visited by all individuals 
+d3 <- d2 %>% filter(grepl("habs", term)) %>% 
+  filter(estimate > -5)
+
+d4 <- d3 %>% dplyr::group_by(term) %>% 
+  dplyr::summarise(
+    mean = mean(estimate),
+    ymin = mean - 1.96 * sd(estimate),
+    ymax = mean + 1.96 * sd(estimate)
+    )
+
+# rank the means from largest to smallest (rank() default is from smallest to largest)
+rank_df <- data.frame(term = unique(d4$term), desc_order = rank(-d4$mean))
+rank_df
+
+# add an ordering column to d3 - these will need to be changed depending on the covariates
+d3$order <- ifelse(d3$term == "habsFAgriculture", 5,
+       ifelse(d3$term == "habsFExotic Conifers", 3, 
+              ifelse(d3$term == "habsFExotic Hardwoods", 4, 
+                     ifelse(d3$term == "habsFNative Forest", 2, 
+                            ifelse(d3$term == "habsFOther", 6, 
+                                   ifelse(d3$term == "habsFSuburban", 1, NA))))))
+
+# add an ordering colum to d3 using ranks
+# d3$order <- rep(desc_order, times = as.vector(table(d3$term)))
+d3$id <- as.factor(d3$id)
+d3 <- d3[order(d3$order),]
+
+# rank from largest to smallest (rank() default is from smallest to largest)
+d4$order <- rank_df$desc_order
+d4 <- d4[order(d4$order),]
+d4$term <- factor(d4$term)
+
+coefficients <- d3
+coefficients$x <- 1:nrow(coefficients)
+
+```
+
+Create the plot
+
+```{r}
+
+ggplot(data = d3, 
+       aes(x = reorder(term, order), y = estimate, group = id, col = Age, pch = Sex)) +
+  geom_rect(data = d4, 
+            aes(xmin = order - 0.4, xmax = order + 0.4, ymin = ymin, ymax = ymax), 
+            inherit.aes = F,
+            fill = "grey90") +
+  geom_segment(data = d4, aes(x = order - 0.4, xend = order + 0.4, y = mean, yend = mean), 
+               inherit.aes = F,
+               size = 0.25) +
+  geom_pointrange(aes(ymin = estimate - std.error, ymax = estimate + std.error),
+                  position = position_dodge(width = 0.7), size = 0.5) +
+  geom_hline(yintercept = 0, lty = 2) +
+  labs(x = "Land Cover Type", y = expression(Coefficient~values~(beta))) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(margin = margin(t = 10, b = 10), angle = 0)) +
+  scale_x_discrete(labels = 
+                     c("Suburban", "Native Forest", 
+                       "Ex. Conifers", "Ex. Hardwoods", 
+                       "Agriculture", "Other"))
+
+```
+
+## Sex
+
+There doesn't appear to be a trend for sex in any of the covariates.
+
+```{r}
+
+terms <- unique(d3$term)
+
+```
+::: {.panel-tabset}
+
+## Suburban
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[1]),
+                  aes(x = Sex, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[1]) +
+  theme_classic()
+
+```
+
+## Native forest
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[2]),
+                  aes(x = Sex, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[2]) +
+  theme_classic()
+
+```
+
+## Exotic Conifers
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[3]),
+                  aes(x = Sex, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[3]) +
+  theme_classic()
+
+```
+
+## Exotic Hardwoods
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[4]),
+                  aes(x = Sex, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[4]) +
+  theme_classic()
+
+```
+
+## Agriculture
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[5]),
+                  aes(x = Sex, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[5]) +
+  theme_classic()
+
+```
+
+## Other
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[6]),
+                  aes(x = Sex, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[6]) +
+  theme_classic()
+
+```
+
+:::
+
+
+## Origin
+
+Origin is whether the kākā was captive-raised and released into the sanctuary, or whether the kākā was hatched in an Orokonui nest. In the x-axis 'c' is captive and 'o' is Orokonui.
+
+There also doesn't appear to be a trend for origin in any of the covariates.
+
+::: {.panel-tabset}
+
+## Suburban
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[1]),
+                  aes(x = Origin, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[1]) +
+  theme_classic()
+
+```
+
+## Native forest
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[2]),
+                  aes(x = Origin, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[2]) +
+  theme_classic()
+
+```
+
+## Exotic Conifers
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[3]),
+                  aes(x = Origin, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[3]) +
+  theme_classic()
+
+```
+
+## Exotic Hardwoods
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[4]),
+                  aes(x = Origin, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[4]) +
+  theme_classic()
+
+```
+
+## Agriculture
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[5]),
+                  aes(x = Origin, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[5]) +
+  theme_classic()
+
+```
+
+## Other
+```{r}
+
+ggplot() +
+  geom_pointrange(data = d3 %>% filter(term == terms[6]),
+                  aes(x = Origin, 
+                      y = estimate, 
+                      group = id, col = Age, pch = Sex,
+                      ymin = estimate - std.error, 
+                      ymax = estimate + std.error),
+                  position = position_dodge(width = 0.5), 
+                  size = 0.75,
+                  linewidth = 1) +
+  geom_hline(yintercept = 0, lty = 2) +
+  scale_colour_viridis_c("Age", breaks = seq(0,10,2)) +
+  scale_y_continuous(terms[6]) +
+  theme_classic()
+
+```
+
+:::
+
+# Quantitatively assess coefficient estimates against age
+
+Sex and origin did not appear to effect the habitat selection, however, there appeared to be an age-related effect present for some of the covariates. To quantify this we will fit some linear models.
+
+::: {.panel-tabset}
+
+## Native forest
+
+There is a positive relationship between age and the coefficient for the native forest habitat, suggesting that older individuals are using native forest more than younger individuals, although it's not quite statistically significant.
+
+```{r}
+
+native_forest_lm <- lm(estimate ~ Age, data = coefficients, subset = (term =="habsFNative Forest"))
+summary(native_forest_lm)
+# plot
+nf_lm <- effect_plot(native_forest_lm, pred = Age, plot.points = T, interval = T) +
+  labs(x = "Age", y = expression(paste("Estimate"))) +
+  ggtitle("Native Forest") +
+  scale_x_continuous(breaks = seq(0, 10, 2)) +
+  geom_hline(yintercept =  0, linetype = "dashed") +
+  theme_classic()
+
+nf_lm
+
+```
+
+## Exotic Conifers
+
+There is a clear negative relationship between age and the coefficient for the exotic conifers category, suggesting that younger individuals are using exotic conifers more than older individuals. This trend is statistically significant and has an R^2 of 0.86.
+
+```{r}
+
+exotic_conifers_lm <- lm(estimate ~ Age, data = coefficients, subset = (term =="habsFExotic Conifers"))
+summary(exotic_conifers_lm)
+ec_lm <- effect_plot(exotic_conifers_lm, pred = Age, plot.points = T, interval = T) +
+  labs(x = "Age", y = expression(paste("Estimate"))) +
+  ggtitle("Exotic Conifers") +
+  scale_x_continuous(breaks = seq(0, 10, 2)) +
+  geom_hline(yintercept =  0, linetype = "dashed") +
+  theme_classic()
+
+ec_lm
+
+```
+
+## Exotic Hardwoods
+
+There is a slight but non-significant negative relationship between age and the coefficient for the exotic hardwoods category.
+
+```{r}
+
+exotic_hardwoods_lm <- lm(estimate ~ Age, data = coefficients, subset = (term =="habsFExotic Hardwoods"))
+summary(exotic_hardwoods_lm)
+eh_lm <- effect_plot(exotic_hardwoods_lm, pred = Age, plot.points = T, interval = T) +
+  labs(x = "Age", y = expression(paste("Estimate"))) +
+  ggtitle("Exotic Hardwoods") +
+  geom_hline(yintercept =  0, linetype = "dashed") +
+  theme_classic()
+
+eh_lm
+
+```
+
+## Agriculture
+
+THe selection of agriculture does not show any clear trend relating to age.
+
+```{r}
+
+agriculture <- lm(estimate ~ Age, data = coefficients, subset = (term =="habsFAgriculture"))
+summary(agriculture)
+effect_plot(agriculture, pred = Age, plot.points = T, interval = T) +
+  theme_classic()
+
+```
+
+## Suburban
+
+As there are only two individuals that visited the suburban category enough to get a reasonable coefficient, we can't fit a linear model.
+
+```{r}
+
+suburban <- lm(estimate ~ Age, data = coefficients, subset = (term =="habsFSuburban"))
+summary(suburban)
+effect_plot(suburban, pred = Age, plot.points = T, interval = T) +
+  theme_classic()
+
+```
+
+## Other
+
+The selection of 'other' does not show any clear trend relating to age.
+
+```{r}
+
+other <- lm(estimate ~ Age, data = coefficients, subset = (term =="habsFOther"))
+summary(other)
+effect_plot(other, pred = Age, plot.points = T, interval = T) +
+  theme_classic()
+
+```
+
+:::
+
+## Combine the plots of native forest and exotic conifers
+
+```{r}
+
+nf_lm + ec_lm
+
+# to save the plot
+# ggsave(paste0("outputs/plots/linear_models_forest_conifers", Sys.Date(), ".png"), width=180, height=80, units="mm", dpi = 800)
+
+```
+
+### References
+
+::: {#refs}
+:::
+
+```{r}
+
+sessionInfo()
+
+```
+

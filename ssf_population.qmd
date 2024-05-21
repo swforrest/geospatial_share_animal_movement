@@ -1,0 +1,981 @@
+---
+title: "Kākā Population SSF"
+author: "Scott Forrest"
+format: html
+bibliography: references.bib
+---
+
+# Load Packages
+
+```{r}
+#| warning: false
+
+# library(amt)
+# library(lubridate)
+# library(raster)
+# library(survival)
+# library(tidyverse)
+# library(car)
+# library(plyr)
+# library(dplyr)
+# library(maptools)
+# library(jtools)
+# library(BMA)
+# library(RColorBrewer)
+#library(sen2r)
+
+# library(survival)
+# library(TwoStepCLogit)
+# library(glmmTMB)
+# library(ecospat)
+# library(tictoc)
+# library(beepr)
+# library(Rfast)
+
+# remotes::install_github("adamlilith/enmSdm")
+
+library(tidyverse)
+packages <- c("amt", "terra", "raster", "lubridate", "INLA", "beepr", "tictoc", "RColorBrewer", "ecospat", "enmSdm")
+walk(packages, require, character.only = T)
+
+```
+
+# Import data
+
+```{r}
+
+data_ssf <- read_csv("outputs/data_SSF_ready_2024-03-24.csv")
+
+data_ssf$habsF <- factor(data_ssf$habs, labels = c("Kanuka", "Native Forest", "Exotic Conifers", "Exotic Hardwoods", "Agriculture", "Suburban", "Other"))
+
+ndvi <- rast("mapping/NDVI 18thMay21.tif")
+# plot(ndvi)
+
+# terra::extract(ndvi, cbind(data_ssf$x2_, data_ssf$y2_))[,1]
+data_ssf$ndvi <- terra::extract(ndvi, cbind(data_ssf$x2_, data_ssf$y2_))[,1]
+# data_ssf$id10 <- data_ssf$id_num
+
+```
+
+# Fit the SSF using INLA
+
+## Define the formula
+
+In INLA we specify all the 'fixed' effects as well as the 'random' effects. The majority of this code came from @Muff2020-fu, which we suggest reading. This paper and the supplementary materials has information about priors for this model, and about fixing the variance of the step_id random effect as a large value.
+
+```{r}
+
+formula.random <- y ~ -1 + 
+  
+  native_forest + 
+  exotic_conifers + 
+  exotic_hardwoods + 
+  agriculture + 
+  suburban + 
+  other + 
+  # ndvi +
+  # I(ndvi^2) +
+  sl_ +
+  log_sl_ +
+  cos_ta_ +
+  
+  f(step_id, model = "iid", hyper = list(theta = list(initial = log(1e-8), fixed = T))) +
+  f(id1, native_forest, values = 1:10, model = "iid",
+    hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  f(id2, exotic_conifers, values = 1:10, model = "iid",
+    hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  f(id3, exotic_hardwoods, values = 1:10, model = "iid",
+    hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  f(id4, agriculture, values = 1:10, model = "iid",
+    hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  f(id5, suburban, values = 1:10, model = "iid",
+    hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  f(id6, other, values = 1:10, model = "iid",
+    hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) #+
+  # f(id7, ndvi, values = 1:10, model = "iid",
+  #   hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  # f(id8, I(ndvi^2), values = 1:10, model = "iid",
+  #   hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) #+
+  # f(id7, sl_, values = 1:10, model = "iid",
+  #   hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  # f(id8, log_sl_, values = 1:10, model = "iid",
+  #   hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+  # f(id9, cos_ta_, values = 1:10, model = "iid",
+  #   hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01))))
+
+```
+
+Set the priors for all of the fixed effects. Here we are using normal (Gaussian) priors for all of the fixed effects. The mean of the prior is set to 0, and the precision is set to 1e-4. This is a very weak prior.
+
+```{r}
+
+mean.beta <- 0
+prec.beta <- 1e-4
+
+```
+
+
+
+```{r}
+
+# if the model has already been run and the output saved
+m_all <- readRDS("outputs/INLA_model_ndvi2_move_params_2024-04-07.rds")
+
+```
+
+## Fit the model
+
+```{r fit_inla}
+
+tic()
+m_all <- inla(formula.random, 
+              family = "Poisson", 
+              data = data_ssf,
+              control.fixed = list(
+                mean = mean.beta,
+                prec = list(default = prec.beta)
+                )
+              )
+toc()
+beep(sound = 2)
+
+```
+
+## Checking results with glmmTMB - they are the same
+
+```{r}
+
+# library(glmmTMB)
+# 
+# TMBStruc = glmmTMB(y ~ -1 + 
+#                       native_forest + 
+#                       exotic_conifers + 
+#                       exotic_hardwoods + 
+#                       agriculture + 
+#                       suburban + 
+#                       other + 
+#                       # ndvi +
+#                       # I(ndvi^2) +
+#                       sl_ +
+#                       log_sl_ +
+#                       cos_ta_ + 
+#                       (1|step_id) + 
+#                       (0 + native_forest | id1) +
+#                       (0 + exotic_conifers | id1) +
+#                       (0 + exotic_hardwoods | id1) +
+#                       (0 + agriculture | id1) +
+#                       (0 + suburban | id1) +
+#                       (0 + other | id1), 
+#                       family=poisson, data=data_ssf, doFit=FALSE) 
+# 
+# TMBStruc$parameters$theta[1] = log(1e3) 
+# TMBStruc$mapArg = list(theta=factor(c(NA,1:6)))
+# 
+# glmm.TMB.random <- glmmTMB:::fitTMB(TMBStruc)
+# summary(glmm.TMB.random)
+
+```
+
+
+## Check the model outputs
+
+```{r}
+
+summary(m_all)
+
+```
+
+## Plot the posterior estimates
+
+```{r}
+
+plot(m_all$marginals.fixed$native_forest[,1], m_all$marginals.fixed$native_forest[,2], 
+     type = "l", col = "blue", xlab = "Coefficient estimates", ylab = "Density", xlim = c(-3,2), ylim = c(0,4))
+# lines(m_all$marginals.fixed$ndvi[,1], m_all$marginals.fixed$ndvi[,2],
+#       col = "skyblue")
+lines(m_all$marginals.fixed$exotic_conifers[,1], m_all$marginals.fixed$exotic_conifers[,2], 
+      col = "red")
+lines(m_all$marginals.fixed$exotic_hardwoods[,1], m_all$marginals.fixed$exotic_hardwoods[,2],
+      col = "green")
+lines(m_all$marginals.fixed$agriculture[,1], m_all$marginals.fixed$agriculture[,2],
+      col = "orange")
+lines(m_all$marginals.fixed$suburban[,1], m_all$marginals.fixed$suburban[,2],
+      col = "purple")
+lines(m_all$marginals.fixed$other[,1], m_all$marginals.fixed$other[,2],
+      col = "black")
+
+```
+
+Calculate the posterior modes
+
+```{r}
+
+# calculate the posterior modes
+native_forest_mode <- m_all$marginals.fixed$native_forest[which.max(m_all$marginals.fixed$native_forest[,2]),1]
+exotic_conifers_mode <- m_all$marginals.fixed$exotic_conifers[which.max(m_all$marginals.fixed$exotic_conifers[,2]),1]
+exotic_hardwoods_mode <- m_all$marginals.fixed$exotic_hardwoods[which.max(m_all$marginals.fixed$exotic_hardwoods[,2]),1]
+agriculture_mode <- m_all$marginals.fixed$agriculture[which.max(m_all$marginals.fixed$agriculture[,2]),1]
+suburban_mode <- m_all$marginals.fixed$suburban[which.max(m_all$marginals.fixed$suburban[,2]),1]
+other_mode <- m_all$marginals.fixed$other[which.max(m_all$marginals.fixed$other[,2]),1]
+ndvi_mode <- m_all$marginals.fixed$ndvi[which.max(m_all$marginals.fixed$ndvi[,2]),1]
+ndvi2_mode <- m_all$marginals.fixed$`I(ndvi^2)`[which.max(m_all$marginals.fixed$`I(ndvi^2)`[,2]),1]
+sl_mode <- m_all$marginals.fixed$sl_[which.max(m_all$marginals.fixed$sl_[,2]),1]
+log_sl_mode <- m_all$marginals.fixed$log_sl_[which.max(m_all$marginals.fixed$log_sl_[,2]),1]
+cos_ta_mode <- m_all$marginals.fixed$cos_ta_[which.max(m_all$marginals.fixed$cos_ta_[,2]),1]
+
+```
+
+## NDVI coefficient curve
+
+```{r}
+
+ndvi_x <- seq(min(data_ssf$ndvi), max(data_ssf$ndvi), length.out = 100)
+ndvi_y <- ndvi_mode * ndvi_x + ndvi2_mode * ndvi_x^2
+
+plot(ndvi_x, ndvi_y, type = "l", col = "blue", xlab = "NDVI", ylab = "Coefficient estimate")
+
+```
+
+
+Create a dataframe of the posterior modes
+
+```{r}
+
+covariate_modes <- c(
+  native_forest_mode, 
+  exotic_conifers_mode, 
+  exotic_hardwoods_mode, 
+  agriculture_mode, 
+  suburban_mode, 
+  other_mode, 
+  ndvi_mode,
+  ndvi2_mode,
+  sl_mode, 
+  log_sl_mode, 
+  cos_ta_mode)
+
+covariate_modes <- data.frame("coef" = m_all$names.fixed, "posterior_mode" = covariate_modes)
+covariate_modes_habitat <- covariate_modes[1:8,]
+covariate_modes_habitat
+
+```
+
+Save (and read) the model object
+
+```{r}
+
+saveRDS(m_all, file = paste0("outputs/INLA_model_move_params_", Sys.Date(), ".rds"))
+
+```
+
+## Update the step length (Gamma) distribution
+
+For updating the tentative parameters we recommend reading @Fieberg2021-wx. The supplementary materials of this paper also has useful information for updating the tentative movement parameters.
+
+```{r}
+
+# from the data preparation script
+tentative_gamma_shape <- 0.6789583
+tentative_gamma_scale <- 797.1647
+
+updated_gamma_shape <- as.numeric(tentative_gamma_shape + log_sl_mode)
+updated_gamma_scale <- as.numeric(1/((1/tentative_gamma_scale) - sl_mode))
+
+# sample from the tentative gamma distribution
+sl_samples_tentative <- rgamma(n = 1e5, shape = tentative_gamma_shape, scale = tentative_gamma_scale)
+hist(sl_samples_tentative, breaks = 100, main = "Tentative Gamma Distribution", xlab = "Step Length (m)")
+
+# sample from the updated gamma distribution
+sl_samples_updated <- rgamma(n = 1e5, shape = updated_gamma_shape, scale = updated_gamma_scale)
+hist(sl_samples_updated, breaks = 100, main = "Updated Gamma Distribution", xlab = "Step Length (m)")
+
+# create dataframe for ggplot
+sl_samples_df <- data.frame("sample" = 1:length(sl_samples_tentative),
+                            "sl_tentative" = sl_samples_tentative,
+                            "sl_updated" = sl_samples_updated)
+
+```
+
+Plot the updated Gamma distribution
+
+```{r}
+
+ggplot() +
+  geom_density(data = data_ssf %>% filter(y == 1),
+               aes(x = sl_, fill = as.factor(id)),
+               alpha = 0.1, show.legend = F) +
+  geom_density(data = sl_samples_df,
+               aes(x = sl_tentative),
+               colour = "black", linetype = "dashed", alpha = 1, show.legend = T) +
+  geom_density(data = sl_samples_df,
+               aes(x = sl_updated),
+               colour = "red", alpha = 0.5, show.legend = T) +
+  scale_x_continuous(limits = c(0,3000), name = "Step Length (m)") +
+  scale_y_continuous(name = "Density") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+```
+
+## Updating the turn angle (von Mises) distribution
+
+```{r}
+
+n_samples <- 1e5
+
+updated_vm_kappa <- as.numeric(cos_ta_mode)
+random_numbers(make_vonmises_distr(kappa = -updated_vm_kappa, vcov = NULL))
+
+ta_samples_tentative <- Rfast::rvonmises(n = n_samples, m = 0, k = -updated_vm_kappa) - pi
+hist(ta_samples_tentative, breaks = 100, freq = F, main = "Von Mises distribution", xlab = "Turning angles (radians)")
+
+ta_samples_updated <- Rfast::rvonmises(n = n_samples, m = 0, k = -updated_vm_kappa) - pi
+hist(ta_samples_updated, breaks = 100, freq = F, main = "Von Mises distribution", xlab = "Turning angles (radians)")
+
+vm_ta_df <- data.frame("sample" = 1:n_samples, ta_samples_tentative, ta_samples_updated)
+
+```
+
+Plot the updated von Mises distribution
+
+```{r}
+
+ggplot() +
+  geom_density(data = data_ssf %>% filter(y == 1),
+               aes(x = ta_, fill = as.character(id)),
+               alpha = 0.1, show.legend = F) +
+  geom_density(data = vm_ta_df,
+               aes(x = ta_samples_tentative), 
+               colour = "black", linetype = "dashed") +
+  geom_density(data = vm_ta_df,
+               aes(x = ta_samples_updated), 
+               colour = "red") + 
+  scale_x_continuous(name = "Turning Angle (radians)") +
+  scale_y_continuous(name = "Density") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+```
+
+# Load environmental covariates
+
+```{r}
+
+scrub <- rast("mapping/scrub.tif")
+native_forest <- rast("mapping/native_forest.tif")
+exotic_conifers <- rast("mapping/exotic_conifers.tif")
+exotic_hardwoods <- rast("mapping/exotic_hardwoods.tif")
+agriculture <- rast("mapping/agriculture.tif")
+suburban <- rast("mapping/suburban.tif")
+other <- rast("mapping/other.tif")
+water <- rast("mapping/water.tif")
+
+ndvi <- rast("mapping/NDVI 18thMay21.tif")
+ndvi <- terra::mask(ndvi, water, maskvalue = c(NA, 1), updatevalue = NA)
+ndvi2 <- ndvi^2
+# plot(ndvi2)
+
+coef_rasters <- c(scrub, 
+                  native_forest,
+                  exotic_conifers,
+                  exotic_hardwoods, 
+                  agriculture,
+                  suburban,
+                  other,
+                  ndvi,
+                  ndvi2
+                  )
+
+plot(coef_rasters)
+
+```
+
+# Generating landscape-scale predictions
+
+To generate landscape-scale predictions we use a Monte Carlo approximation of the Barnett-Moorcroft approach @Barnett2008-ta. This approach is appropriate for step selection functions as it considers the animal's movement dynamics. Essentially it calculates the probability of moving to any particular cell, based on the habitat covariates and the likelihood of being in surrounding cells.
+
+A useful reference for this approach (and others) is @Potts2023-my.
+
+We start by estimating layers equivalent to a resource selection function (sometimes termed the 'naive' approach @Signer2017-th). This ignores the movement dynamics (or equivalently considers a movement kernel that can traverse the entire landscape in a single 'step'). This is the probability of being in the cell based on the habitat values alone. We then use the movement parameters to adjust these probabilities to account for the animal's movement dynamics.
+
+## Resource selection function layers (naive approach)
+
+```{r}
+
+scrub_pred <- scrub * 0 # set to zero as it is the reference category
+native_forest_pred <- native_forest * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "native_forest")]
+exotic_conifers_pred <- exotic_conifers * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "exotic_conifers")]
+exotic_hardwoods_pred <- exotic_hardwoods * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "exotic_hardwoods")]
+agriculture_pred <- agriculture * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "agriculture")]
+suburban_pred <- suburban * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "suburban")]
+other_pred <- other * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "other")]
+ndvi_pred <- ndvi * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "ndvi")]
+ndvi2_pred <- ndvi2 * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "I(ndvi^2)")]
+
+# from thesis models
+# scrub_pred <- scrub * 0 # set to zero as it is the reference category
+# native_forest_pred <- native_forest * 0.467
+# exotic_conifers_pred <- exotic_conifers * -0.313
+# exotic_hardwoods_pred <- exotic_hardwoods * -0.560
+# agriculture_pred <- agriculture * -1.105
+# suburban_pred <- suburban * -0.281
+# other_pred <- other * covariate_modes_habitat$posterior_mode[which(covariate_modes_habitat$coef == "other")]
+
+naive_pred <- exp(scrub_pred + 
+                    native_forest_pred + 
+                    exotic_conifers_pred + 
+                    exotic_hardwoods_pred + 
+                    agriculture_pred + 
+                    suburban_pred + 
+                    other_pred +
+                    ndvi_pred +
+                    ndvi2_pred
+                  )
+
+naive_pred <- terra::mask(naive_pred, water, maskvalue = c(NA, 1), updatevalue = NA)
+naive_norm <- (naive_pred - min(terra::values(naive_pred), na.rm = TRUE)) / 
+  (max(terra::values(naive_pred), na.rm = TRUE) - min(terra::values(naive_pred), na.rm = TRUE))
+
+plot(naive_pred)
+plot(naive_norm)
+names(naive_pred) <- "naive_pred"
+
+raster::plot(naive_pred, col = brewer.pal(9, "Reds"))
+hist(naive_pred, breaks = 100)
+
+plot(naive_norm > 0.8)
+
+```
+
+# Using the Barnett-Moorcroft approximation prediction approach with Monte Carlo approximation
+
+Here we use the Barnett-Moorcroft approximation to estimate the UD, sampling from the movement kernel to approximate the integral in the numerator of:
+
+BM equation
+
+```{r mcbm}
+
+# set origin of naive_pred to 0
+original_extent <- ext(scrub)
+xmax_new <- original_extent[2] - original_extent[1]
+ymax_new <- original_extent[4] - original_extent[3]
+ext(naive_pred) <- c(0, xmax_new, 0, ymax_new)
+ext(water) <- c(0, xmax_new, 0, ymax_new)
+
+# Beta_Z_z_list  <- vector(mode = "list", length = 24)
+# MCBM_preds_list <- vector(mode = "list", length = 24)
+
+n_proposals <- 50
+grid_res <- terra::res(naive_pred)
+rows <- terra::nrow(naive_pred)
+cols <- terra::ncol(naive_pred)
+xmax <- ext(naive_pred)[2] 
+ymax <- ext(naive_pred)[4]
+
+tic()
+
+# Create grid of x and y points
+x_points <- rep(1:cols, each = rows)
+y_points <- rep(1:rows, times = cols)
+
+# Generate random angles and lengths
+ta <- runif(n_proposals * length(x_points), min = -pi, max = pi)
+sl <- rgamma(n_proposals * length(x_points), 
+             shape = updated_gamma_shape,
+             scale = updated_gamma_scale)
+
+# hist(sl, breaks = 100, freq = F, main = "Gamma distribution", xlab = "Step lengths (m)")
+
+# Calculate proposal points
+x_proposal <- ((-(grid_res/2) + x_points * grid_res) + sl * sin(ta)) #%% xmax
+y_proposal <- ((-(grid_res/2) + y_points * grid_res) + sl * cos(ta)) #%% ymax
+
+# exp(beta * Z(x))
+# plot(naive_ud_cropped[[i]])
+
+# ifelse((hour_no - 1) == 0, 24, hour_no)
+
+# exp(beta * Z(z)) * psi(.) dz
+Beta_Z_z_proposed <- terra::extract(naive_pred, cbind(x_proposal, y_proposal))[,1]
+# Beta_Z_z_proposed <- terra::extract(naive_pred[[ifelse((hour_no - 1) == 0, 24, hour_no - 1)]], cbind(x_proposal, y_proposal))[,1]
+Beta_Z_z_array <- array(Beta_Z_z_proposed, dim = c(rows, cols , n_proposals))
+Beta_Z_z_matrix <- apply(Beta_Z_z_array, 1:2, mean, na.rm = TRUE)
+
+toc()
+
+Beta_Z_z <- flip(terra::setValues(naive_pred, Beta_Z_z_matrix))
+# plot(naive_pred[[hour_no]])
+# plot(naive_pred[[ifelse((hour_no - 1) == 0, 24, hour_no)]])
+plot(Beta_Z_z)
+
+Beta_Z_z_mask <- terra::mask(Beta_Z_z, water, maskvalue = c(NA, 1), updatevalue = NA)
+plot(Beta_Z_z_mask)
+
+# exp(beta * Z(x)) * exp(beta * Z(z)) * psi(.) dz
+u_x_unnorm <- naive_pred * Beta_Z_z_mask
+# plot(u_x_unnorm)
+u_x <- u_x_unnorm / as.numeric(terra::global(u_x_unnorm, fun = "sum", na.rm = TRUE))
+names(u_x) <- "MCBM"
+plot(u_x)
+
+# MCBM_preds_list[[hour_no]] <- u_x
+# terra::writeRaster(rast(MCBM_preds_list), paste0("mapping/lasso_MCBM_pred_stack_norm_daily_", Sys.Date(), ".tif"))
+
+```
+
+## Validating the predictions
+
+Boyce index function
+
+```{r}
+
+ecospat.boyce2 <- function (fit, obs, nclass = 0, window.w = "default", res = 100, 
+  PEplot = TRUE, rm.duplicate = TRUE, method = "spearman") 
+{
+  boycei <- function(interval, obs, fit) {
+    pi <- sum(as.numeric(obs >= interval[1] & obs <= interval[2]))/length(obs)
+    ei <- sum(as.numeric(fit >= interval[1] & fit <= interval[2]))/length(fit)
+    return(round(pi/ei, 10))
+  }
+  if (inherits(fit, "RasterLayer")) {
+    if (is.data.frame(obs) || is.matrix(obs)) {
+      obs <- raster::extract(fit, obs)
+    }
+    fit <- getValues(fit)
+    fit <- fit[!is.na(fit)]
+    obs <- obs[!is.na(obs)]
+  }
+  mini <- min(fit, obs)
+  maxi <- max(fit, obs)
+  if (length(nclass) == 1) {
+    if (nclass == 0) {
+      if (window.w == "default") {
+        window.w <- (max(fit) - min(fit))/10
+      }
+      vec.mov <- seq(from = mini, to = maxi - window.w, 
+        by = (maxi - mini - window.w)/res)
+      vec.mov[res + 1] <- vec.mov[res + 1] + 1
+      interval <- cbind(vec.mov, vec.mov + window.w)
+    }
+    else {
+      vec.mov <- seq(from = mini, to = maxi, by = (maxi - 
+        mini)/nclass)
+      interval <- cbind(vec.mov, c(vec.mov[-1], maxi))
+    }
+  }
+  else {
+    vec.mov <- c(mini, sort(nclass[!nclass > maxi | nclass < 
+      mini]))
+    interval <- cbind(vec.mov, c(vec.mov[-1], maxi))
+  }
+  f <- apply(interval, 1, boycei, obs, fit)
+  to.keep <- which(f != "NaN")
+  f <- f[to.keep]
+  if (length(f) < 2) {
+    b <- NA
+  }
+  else {
+    r <- 1:length(f)
+    if (rm.duplicate == TRUE) {
+      r <- c(1:length(f))[f != c(f[-1], TRUE)]
+    }
+    b <- cor(f[r], vec.mov[to.keep][r], method = method)
+  }
+  HS <- apply(interval, 1, sum)/2
+  if (length(nclass) == 1 & nclass == 0) {
+    HS[length(HS)] <- HS[length(HS)] - 1
+  }
+  HS <- HS[to.keep]
+  if (PEplot == TRUE) {
+    plot(HS, f, xlab = "Habitat suitability", ylab = "Predicted/Expected ratio", 
+      col = "grey", cex = 0.75)
+    points(HS[r], f[r], pch = 19, cex = 0.75)
+  }
+  return(list(F.ratio = f, cor = round(b, 3), HS = HS))
+}
+
+```
+
+
+
+```{r}
+
+ecospat.boyce3 <- function (fit, obs, nclass = 0, window.w = "default", res = 100, 
+  PEplot = TRUE, rm.duplicate = TRUE, method = "spearman") 
+{
+  boycei <- function(interval, obs, fit) {
+    pi <- sum(as.numeric(obs >= interval[1] & obs <= interval[2]))/length(obs)
+    ei <- sum(as.numeric(fit >= interval[1] & fit <= interval[2]))/length(fit)
+    return(round(pi/ei, 10))
+  }
+  if (inherits(fit, "SpatRaster")) {
+    if (is.data.frame(obs) || is.matrix(obs)) {
+      obs <- terra::extract(fit, as.data.frame(obs), ID = FALSE)[,1]
+      obs <- obs[!is.na(obs)]
+    }
+    fit <- terra::values(fit, na.rm = T)
+  }
+  mini <- min(fit, obs)
+  maxi <- max(fit, obs)
+  # mini <- min(fit, obs, na.rm = TRUE)
+  # maxi <- max(fit, obs, na.rm = TRUE)
+  
+  if (length(nclass) == 1) {
+    if (nclass == 0) {
+      if (window.w == "default") {
+        window.w <- (max(fit) - min(fit))/10
+      }
+      vec.mov <- seq(from = mini, to = maxi - window.w, 
+        by = (maxi - mini - window.w)/res)
+      vec.mov[res + 1] <- vec.mov[res + 1] + 1
+      interval <- cbind(vec.mov, vec.mov + window.w)
+    }
+    else {
+      vec.mov <- seq(from = mini, to = maxi, by = (maxi - 
+        mini)/nclass)
+      interval <- cbind(vec.mov, c(vec.mov[-1], maxi))
+    }
+  }
+  else {
+    vec.mov <- c(mini, sort(nclass[!nclass > maxi | nclass < 
+      mini]))
+    interval <- cbind(vec.mov, c(vec.mov[-1], maxi))
+  }
+  f <- apply(interval, 1, boycei, obs, fit)
+  to.keep <- which(f != "NaN")
+  f <- f[to.keep]
+  if (length(f) < 2) {
+    b <- NA
+  }
+  else {
+    r <- 1:length(f)
+    if (rm.duplicate == TRUE) {
+      r <- c(1:length(f))[f != c(f[-1], TRUE)]
+    }
+    b <- cor(f[r], vec.mov[to.keep][r], method = method)
+  }
+  HS <- apply(interval, 1, sum)/2
+  if (length(nclass) == 1 & nclass == 0) {
+    HS[length(HS)] <- HS[length(HS)] - 1
+  }
+  HS <- HS[to.keep]
+  if (PEplot == TRUE) {
+    plot(HS, f, xlab = "Habitat suitability", ylab = "Predicted/Expected ratio", 
+      col = "grey", cex = 0.75)
+    points(HS[r], f[r], pch = 19, cex = 0.75)
+  }
+  return(list(F.ratio = f, cor = round(b, 3), HS = HS))
+}
+
+```
+
+
+
+```{r}
+
+naive_pred <- naive_norm
+
+ext(naive_pred) <- original_extent
+ext(u_x) <- original_extent
+ext(water) <- original_extent
+
+obs_data <- data_ssf %>% filter(y == 1) %>% transmute(x = x2_, y = y2_)
+# obs_data <- data_ssf %>% filter(y == 0) %>% transmute(x = x2_, y = y2_)
+
+obs <- terra::extract(naive_pred, obs_data, ID = FALSE)[,1]
+# obs <- obs[!is.na(obs)]
+ecospat.boyce(terra::values(naive_pred, na.rm = T)[,1], obs)
+
+# ecospat.boyce2(raster(naive_pred), obs_data)
+# ecospat.boyce3(naive_pred, obs_data)
+# ecospat.boyce3(u_x, obs_data)
+
+# obs <- terra::extract(naive_pred, as.matrix(obs_data))
+# fit <- terra::values(naive_pred, na.rm = T)
+# 
+# mini <- min(as.numeric(fit), as.numeric(obs))
+# maxi <- max(fit, obs)
+
+```
+
+
+
+```{r}
+
+ids <- unique(data_ssf$id)
+
+for(i in 1:10) {
+  
+obs_data <- data_ssf %>% filter(y == 1 & id == ids[i]) %>% transmute(x = x1_, y = y1_)
+obs <- terra::extract(naive_pred, obs_data, ID = FALSE)[,1]
+obs <- obs[!is.na(obs)]
+
+bi <- ecospat.boyce(terra::values(naive_pred, na.rm = T)[,1], obs)
+print(bi)
+
+}
+
+```
+
+
+Using an approach that compares the available steps against the used steps
+
+```{r}
+
+ext(u_x) <- original_extent
+ext(naive_pred) <- original_extent
+ext(water) <- original_extent
+
+# install.packages("remotes")
+# remotes::install_github("adamlilith/enmSdm")
+
+#  & id == 45505
+
+pres_data <- data_ssf %>% filter(y == 1) %>% transmute(x = x2_, y = y2_)
+pres_naive <- terra::extract(naive_pred, pres_data, ID = FALSE) %>% drop_na() %>% pull()
+pres_mcbm <- terra::extract(u_x, pres_data, ID = FALSE) %>% drop_na() %>% pull()
+
+contrast_data <- data_ssf %>% filter(y == 0) %>% transmute(x = x2_, y = y2_)
+contrast_naive <- terra::extract(naive_pred, contrast_data, ID = FALSE) %>% drop_na() %>% pull()
+contrast_mcbm <- terra::extract(u_x, contrast_data, ID = FALSE) %>% drop_na() %>% pull()
+
+# enmSdm::contBoyce(pres_naive, terra::values(naive_pred, na.rm = T), graph = TRUE)
+# enmSdm::contBoyce(contrast_naive, pres_naive, graph = TRUE)
+# enmSdm::contBoyce(pres_mcbm, contrast_mcbm, graph = TRUE)
+
+ecospat.boyce(fit = contrast_naive, obs = pres_naive)
+ecospat.boyce(fit = contrast_mcbm, obs = pres_mcbm)
+
+```
+
+
+
+```{r}
+
+# formula_random_jackknife <- y ~ -1 + 
+#   
+#   native_forest + 
+#   exotic_conifers + 
+#   exotic_hardwoods + 
+#   agriculture + 
+#   suburban + 
+#   other + 
+#   sl_ +
+#   log_sl_ +
+#   cos_ta_ +
+#   
+#   f(step_id, model = "iid", hyper = list(theta = list(initial = log(1e-6), fixed = T))) +
+#   f(id1, native_forest, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id2, exotic_conifers, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id3, exotic_hardwoods, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id4, agriculture, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id5, suburban, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id6, other, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id7, sl_, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id8, log_sl_, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01)))) +
+#   f(id9, cos_ta_, values = 1:9, model = "iid",
+#     hyper = list(theta = list(initial = log(1), fixed = F, prior = "pc.prec", param = c(1,0.01))))
+
+```
+
+
+
+```{r inla_jackknife}
+
+ids <- unique(data_ssf$id)
+
+ssf_list <- vector(mode = "list", length = 10)
+
+# create a list of data frames that contain all individuals besides 1, sequentially for each id
+for (i in seq_along(c(1:10))) {
+  ssf_list[[i]] <- data_ssf %>% filter(id != ids[i])
+}
+
+names(ssf_list) <- c("T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14")
+
+mean.beta <- 0
+prec.beta <- 1e-4
+
+# create function to run an SSF model on each object of the list
+inla_function <- function(ssf_data) {
+  
+  tic()
+  model_fit <- inla(formula.random, 
+                    family = "Poisson", 
+                    data = ssf_data,
+                    control.fixed = list(
+                      mean = mean.beta,
+                      prec = list(default = prec.beta)
+                      )
+  )
+  
+  print(toc())
+  return(model_fit)
+  
+  }
+
+# run models (same as above, different data), this may take a while to run
+inla_models <- map(ssf_list, inla_function)
+
+summary(inla_models[[4]]) # look at a single model
+
+saveRDS(inla_models, file = paste0("INLA_models_jacknife", Sys.Date(), ".rds")) # to save a single object
+# inla_models <- readRDS(file = "INLA_models_jacknife2024-04-07.rds")
+
+beep(sound = 2)
+
+```
+
+
+
+```{r}
+
+for(i in 1:10) print(summary(inla_models[[i]]))
+
+```
+
+## Generating RSF predictions
+
+```{r}
+
+coef_rasters <- c(scrub, 
+                  native_forest,
+                  exotic_conifers,
+                  exotic_hardwoods, 
+                  agriculture,
+                  suburban,
+                  other,
+                  ndvi,
+                  ndvi2
+                  )
+
+# create sequence of NDVI values
+# ndvi_x <- seq(min(data_ssf$ndvi), max(data_ssf$ndvi), length.out = 100)
+
+rsf_preds <- vector(mode = "list", length = 10) # create empty list for rsf predictions
+cbi_list <- vector(mode = "list", length = 10) # create empty list for continuous Boyce Index objects
+
+for (j in 1:10) {
+  
+# ndvi_y <- inla_models[[j]]$summary.fixed$mean[7] * ndvi_x + inla_models[[j]]$summary.fixed$mean[8] * ndvi_x^2
+# plot(ndvi_x, ndvi_y, type = "l", col = "blue", xlab = "NDVI", ylab = "Coefficient estimate")
+  
+  betas <- c(0,inla_models[[j]]$summary.fixed$mean[c(1:8)])
+  # betas <- c(0,inla_models[[j]]$summary.fixed$mean[c(1:6)])
+  
+  # create blank raster
+  rsf <- coef_rasters[[1]]
+  terra::values(rsf) <- 0
+  names(rsf) <- "rsf"
+  # plot(rsf)
+  
+  for (i in 1:9) {
+  # for (i in 1:7) {
+    rsf <- rsf + (coef_rasters[[i]] * betas[[i]])
+  }
+  
+  rsf_exp <- exp(rsf)
+  # normalise from 0 to 1
+  rsf_norm <- (rsf_exp - min(terra::values(rsf_exp), na.rm = TRUE)) / 
+    (max(terra::values(rsf_exp), na.rm = TRUE) - min(terra::values(rsf_exp), na.rm = TRUE))
+  
+  raster::plot(rsf_norm, col = brewer.pal(9, "Reds"))
+  rsf_preds[[j]] <- rsf_norm
+  
+  # continuous Boyce index
+  # presence values for each ID
+  pres_data_id <- data_ssf %>% filter(y == 1 & id == ids[j]) %>% transmute(x = x2_, y = y2_)
+  pres_rsf_id <- terra::extract(rsf_norm, pres_data_id, ID = FALSE) %>% drop_na() %>% pull()
+  
+  # availability values for each ID
+  avail_data_id <- data_ssf %>% filter(y == 0 & id == ids[j]) %>% transmute(x = x2_, y = y2_)
+  avail_rsf_id <- terra::extract(rsf_norm, avail_data_id, ID = FALSE) %>% drop_na() %>% pull()
+  
+  # avail_rsf_id <- terra::values(rsf_norm, na.rm = TRUE)[,1]
+  
+  cbi_list[[j]] <- ecospat.boyce(fit = avail_rsf_id, 
+                                 obs = pres_rsf_id, 
+                                 window.w = 0.2, 
+                                 res = 100)
+  
+  print(cbi_list[[j]]$cor)
+  cbi_list[[j]]$id <- ids[j]
+  cbi_df <- bind_rows(cbi_list)
+
+}
+
+# saveRDS(rsf_preds, file = paste0("all_rsf_preds_jackknife", Sys.Date(), ".rds")) # to save a single object
+# hk_rasters <- readRDS("all_hk_raster_files_minus_1_tag.rds") # this model was used in the thesis
+
+```
+
+
+
+```{r}
+
+cbi_df %>% summarise(cor.avg = mean(cor),
+                     cor.sd = sd(cor))
+
+cbi_df$HS_round <- round(cbi_df$HS, 2)
+# cbi_df$HS_round <- round(cbi_df$HS * 2, 1)/2
+
+ggplot() +
+  geom_line(data = cbi_df, 
+            aes(x = HS, y = F.ratio, colour = as.factor(id))) +
+  theme_classic()
+
+boyce_summary <- cbi_df %>% group_by(HS_round) %>% 
+  summarise(mean = mean(F.ratio), 
+            median = median(F.ratio), 
+            sd = sd(F.ratio), 
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = mean - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = mean + qt(1 - (0.05 / 2), n - 1) * se)
+
+boyce_summary
+
+# boyce_summary$res <- 50
+# boyce_summary_100 <- boyce_summary
+
+ggplot() +
+  geom_hline(yintercept = 1, linetype = "dashed", alpha = 0.5) +
+  # geom_line(data = cbi_df, 
+  #           aes(x = HS, y = F.ratio, group = as.factor(id)),
+  #           alpha = 0.1) +
+  geom_point(data = boyce_summary, 
+             aes(x = HS_round, y = mean)) +
+  geom_line(data = boyce_summary, 
+            aes(x = HS_round, y = mean)) +
+  geom_ribbon(data = boyce_summary, 
+              aes(x = HS_round, ymin = lower.ci, ymax = upper.ci), alpha = 0.15) +
+  #geom_line(aes(x = HS, y = lower.ci), linetype = "dashed", alpha = 0.5) +
+  #geom_line(aes(x = HS, y = upper.ci), linetype = "dashed", alpha = 0.5) +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  # scale_y_continuous(limits = c(0, 5)) +
+  coord_cartesian(ylim = c(0,3)) +
+  theme_classic()
+
+```
+
+
+
+### References
+
+::: {#refs}
+:::
+
+```{r}
+
+sessionInfo()
+
+```
+
