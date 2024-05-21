@@ -1,6 +1,6 @@
 # Geospatial Share animal movement workshop
 
-Resources for the Geospatial Share animal movement workshop.
+Resources for the Geospatial Share animal movement workshop in May 2024.
 
 The coded example works through a step selection analysis of kākā that were GPS-tracked at Orokonui Ecosanctuary in Dunedin, Aotearoa (New Zealand).
 
